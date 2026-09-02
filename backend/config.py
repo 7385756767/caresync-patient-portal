@@ -5,7 +5,7 @@
 
 # Application identity
 APP_NAME = "CareSync"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 APP_DESCRIPTION = "Patient portal for hospital and clinic management"
 
 # Database connection settings

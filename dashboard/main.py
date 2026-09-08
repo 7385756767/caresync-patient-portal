@@ -1,10 +1,9 @@
+
 # main.py
-# CareSync Pro Dashboard Backend
+# CareSync Dashboard Backend
 #
 # This file is a FastAPI application.
-# It connects to the caresync_pro MySQL database and provides API endpoints
-# covering all 8 tables: doctor, patient, appointment, billing, prescription,
-# notification, report, and activity_log.
+# It connects to the MySQL database and provides two API endpoints.
 # The Vue.js frontend will call these endpoints to get data.
 #
 # To run this file:
@@ -15,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware # allows browser to call this
 import mysql.connector                             # connects to MySQL
 
 # ── Create the FastAPI application ──────────────────────────────────────────
-app = FastAPI(title='CareSync Pro Dashboard API')
+app = FastAPI(title='CareSync Dashboard API')
 
 # ── CORS Configuration ───────────────────────────────────────────────────────
 # CORS stands for Cross-Origin Resource Sharing.
@@ -34,15 +33,16 @@ app.add_middleware(
 # We do not reuse a single connection because MySQL closes idle connections.
 def get_db():
     return mysql.connector.connect(
-        host='localhost',
+        host='127.0.0.1',
         port=3306,
         user='root',
-        database='caresync_pro'
+        password='Admin',  # change this to your own MySQL password
+        database='caresync',
+        use_pure=True
     )
-
 # ── ENDPOINT 1: Summary numbers ──────────────────────────────────────────────
 # URL: http://127.0.0.1:8000/summary
-# Returns: total counts across every table, for the dashboard's top cards
+# Returns: total counts for patients, doctors, appointments, and bills
 @app.get('/summary')
 def get_summary():
     db     = get_db()
@@ -74,16 +74,12 @@ def get_summary():
     # Total revenue collected
     cursor.execute('SELECT ROUND(SUM(amount_paid), 2) AS total FROM billing')
     revenue = cursor.fetchone()['total'] or 0
-
-    # Count active prescriptions
     cursor.execute('SELECT COUNT(*) AS total FROM prescription WHERE is_deleted = 0')
     prescriptions = cursor.fetchone()['total']
 
-    # Count unread notifications
     cursor.execute('SELECT COUNT(*) AS total FROM notification WHERE is_read = 0')
     unread_notifications = cursor.fetchone()['total']
 
-    # Count active reports
     cursor.execute('SELECT COUNT(*) AS total FROM report WHERE is_deleted = 0')
     reports = cursor.fetchone()['total']
 
@@ -92,16 +88,16 @@ def get_summary():
 
     # Return all values as a JSON object
     return {
-        'total_patients':        patients,
-        'total_doctors':         doctors,
-        'total_appointments':    appointments,
-        'total_bills':           bills,
-        'rejection_rate':        rejection_rate,
-        'total_revenue':         float(revenue),
-        'total_prescriptions':   prescriptions,
-        'unread_notifications':  unread_notifications,
-        'total_reports':         reports,
-    }
+    'total_patients':        patients,
+    'total_doctors':         doctors,
+    'total_appointments':    appointments,
+    'total_bills':           bills,
+    'rejection_rate':        rejection_rate,
+    'total_revenue':         float(revenue),
+    'total_prescriptions':   prescriptions,
+    'unread_notifications':  unread_notifications,
+    'total_reports':         reports,
+}
 
 # ── ENDPOINT 2: Patient list ─────────────────────────────────────────────────
 # URL: http://127.0.0.1:8000/patients
@@ -136,16 +132,50 @@ def get_patients():
 # ── ENDPOINT 3: Billing summary ──────────────────────────────────────────────
 # URL: http://127.0.0.1:8000/billing
 # Returns: recent 50 bills with patient name and status
-@app.get('/billing')
-def get_billing():
-    db     = get_db()
+    return {'patients': patients}
+
+
+@app.get("/patients/{patient_id}")
+def get_patient(patient_id: int):
+    db = get_db()
     cursor = db.cursor(dictionary=True)
 
     cursor.execute(
-        '''
+        """
+        SELECT
+            patient_id,
+            full_name,
+            gender,
+            blood_group,
+            email
+        FROM patient
+        WHERE patient_id = %s
+          AND is_deleted = 0
+        """,
+        (patient_id,)
+    )
+
+    patient = cursor.fetchone()
+
+    cursor.close()
+    db.close()
+
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    return patient
+
+
+@app.get('/billing')
+def get_billing():
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute(
+        """
         SELECT
             b.bill_id,
-            p.full_name                           AS patient_name,
+            p.full_name AS patient_name,
             b.total_amount,
             b.amount_paid,
             b.status,
@@ -154,94 +184,85 @@ def get_billing():
         JOIN patient p ON p.patient_id = b.patient_id
         ORDER BY b.created_at DESC
         LIMIT 50
-        '''
+        """
     )
+
     bills = cursor.fetchall()
 
-    # Convert Decimal types to float so JSON serialisation works correctly
     for bill in bills:
-        bill['total_amount'] = float(bill['total_amount'])
-        bill['amount_paid']  = float(bill['amount_paid'])
+        if bill["total_amount"] is not None:
+            bill["total_amount"] = float(bill["total_amount"])
+
+        if bill["amount_paid"] is not None:
+            bill["amount_paid"] = float(bill["amount_paid"])
 
     cursor.close()
     db.close()
 
-    return {'bills': bills}
+    return {"bills": bills}
 
-# ── ENDPOINT 4: Doctor list ──────────────────────────────────────────────────
-# URL: http://127.0.0.1:8000/doctors
-# Returns: all active doctors with appointment count
 @app.get('/doctors')
 def get_doctors():
-    db     = get_db()
+    db = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute(
-        '''
+    cursor.execute("""
         SELECT
-            d.doctor_id,
-            d.full_name,
-            d.specialisation,
-            COUNT(a.appointment_id) AS total_appointments
-        FROM doctor d
-        LEFT JOIN appointment a ON a.doctor_id = d.doctor_id
-            AND a.status = 'Completed'
-        WHERE d.is_active = 1
-        GROUP BY d.doctor_id, d.full_name, d.specialisation
-        ORDER BY total_appointments DESC
-        '''
-    )
+            doctor_id,
+            full_name,
+            specialisation,
+            phone,
+            email,
+            is_active
+        FROM doctor
+        ORDER BY full_name
+    """)
+
     doctors = cursor.fetchall()
 
     cursor.close()
     db.close()
 
-    return {'doctors': doctors}
-
-# ── ENDPOINT 5: Prescription list ────────────────────────────────────────────
-# URL: http://127.0.0.1:8000/prescriptions
-# Returns: 50 most recent active prescriptions with patient and doctor names
+    return {
+        'doctors': doctors
+    }
 @app.get('/prescriptions')
 def get_prescriptions():
-    db     = get_db()
+    db = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute(
-        '''
+    cursor.execute("""
         SELECT
-            pr.prescription_id,
-            p.full_name                          AS patient_name,
-            d.full_name                          AS doctor_name,
-            pr.medicine_name,
-            pr.dosage,
-            pr.frequency,
-            pr.duration_days,
-            DATE_FORMAT(pr.created_at, '%d %b %Y') AS prescribed_on
-        FROM prescription pr
-        JOIN patient p ON p.patient_id = pr.patient_id
-        JOIN doctor  d ON d.doctor_id  = pr.doctor_id
-        WHERE pr.is_deleted = 0
-        ORDER BY pr.created_at DESC
-        LIMIT 50
-        '''
-    )
+            p.prescription_id,
+            p.appointment_id,
+            p.patient_id,
+            p.doctor_id,
+            p.medicine_name,
+            p.dosage,
+            p.frequency,
+            p.duration_days,
+            p.instructions,
+            p.created_at
+        FROM prescription p
+        WHERE p.is_deleted = 0
+        ORDER BY p.created_at DESC
+    """)
+
     prescriptions = cursor.fetchall()
 
     cursor.close()
     db.close()
 
-    return {'prescriptions': prescriptions}
+    return {
+        'prescriptions': prescriptions
+    }
 
-# ── ENDPOINT 6: Notification list ────────────────────────────────────────────
-# URL: http://127.0.0.1:8000/notifications
-# Returns: 50 most recent notifications, unread first
 @app.get('/notifications')
 def get_notifications():
-    db     = get_db()
+    db = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute(
-        '''
+    cursor.execute("""
         SELECT
             notification_id,
             user_type,
@@ -249,61 +270,54 @@ def get_notifications():
             title,
             message,
             is_read,
-            DATE_FORMAT(created_at, '%d %b %Y %H:%i') AS created_on
+            created_at
         FROM notification
-        ORDER BY is_read ASC, created_at DESC
-        LIMIT 50
-        '''
-    )
+        ORDER BY created_at DESC
+    """)
+
     notifications = cursor.fetchall()
 
     cursor.close()
     db.close()
 
-    return {'notifications': notifications}
+    return {
+        'notifications': notifications
+    }
 
-# ── ENDPOINT 7: Report list ──────────────────────────────────────────────────
-# URL: http://127.0.0.1:8000/reports
-# Returns: 50 most recent active reports with patient name and report type
 @app.get('/reports')
 def get_reports():
-    db     = get_db()
+    db = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute(
-        '''
+    cursor.execute("""
         SELECT
-            r.report_id,
-            p.full_name                          AS patient_name,
-            r.report_type,
-            r.file_path,
-            d.full_name                          AS generated_by_doctor,
-            DATE_FORMAT(r.created_at, '%d %b %Y') AS generated_on
-        FROM report r
-        JOIN patient p ON p.patient_id = r.patient_id
-        LEFT JOIN doctor d ON d.doctor_id = r.generated_by
-        WHERE r.is_deleted = 0
-        ORDER BY r.created_at DESC
-        LIMIT 50
-        '''
-    )
+            report_id,
+            patient_id,
+            appointment_id,
+            report_type,
+            file_path,
+            generated_by,
+            created_at
+        FROM report
+        WHERE is_deleted = 0
+        ORDER BY created_at DESC
+    """)
+
     reports = cursor.fetchall()
 
     cursor.close()
     db.close()
 
-    return {'reports': reports}
+    return {
+        'reports': reports
+    }
 
-# ── ENDPOINT 8: Activity log list ────────────────────────────────────────────
-# URL: http://127.0.0.1:8000/activity-log
-# Returns: 100 most recent audit trail entries, newest first
 @app.get('/activity-log')
 def get_activity_log():
-    db     = get_db()
+    db = get_db()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute(
-        '''
+    cursor.execute("""
         SELECT
             log_id,
             user_type,
@@ -311,16 +325,51 @@ def get_activity_log():
             action,
             target_table,
             target_id,
+            old_value,
+            new_value,
             ip_address,
-            DATE_FORMAT(logged_at, '%d %b %Y %H:%i') AS logged_on
+            logged_at
         FROM activity_log
         ORDER BY logged_at DESC
-        LIMIT 100
-        '''
-    )
+        LIMIT 500
+    """)
+
     logs = cursor.fetchall()
 
     cursor.close()
     db.close()
 
-    return {'activity_log': logs}
+    return {
+        'activity_log': logs
+    }
+
+@app.get('/doctor-summary')
+def get_doctor_summary():
+    db = get_db()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT
+            d.doctor_id,
+            d.full_name,
+            d.specialisation,
+            COUNT(a.appointment_id) AS total_appointments,
+            SUM(CASE WHEN a.status = 'Completed' THEN 1 ELSE 0 END) AS completed_appointments,
+            SUM(CASE WHEN a.status = 'Scheduled' THEN 1 ELSE 0 END) AS scheduled_appointments,
+            SUM(CASE WHEN a.status = 'Cancelled' THEN 1 ELSE 0 END) AS cancelled_appointments
+        FROM doctor d
+        LEFT JOIN appointment a
+            ON d.doctor_id = a.doctor_id
+        WHERE d.is_active = 1
+        GROUP BY d.doctor_id, d.full_name, d.specialisation
+        ORDER BY total_appointments DESC
+    """)
+
+    doctors = cursor.fetchall()
+
+    cursor.close()
+    db.close()
+
+    return {
+        'doctor_summary': doctors
+    }

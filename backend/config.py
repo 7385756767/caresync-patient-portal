@@ -12,8 +12,8 @@ APP_DESCRIPTION = "Patient portal for hospital and clinic management"
 # In a real deployment, these values would come from environment variables
 # and would never be written directly into the code.
 DATABASE_HOST = "localhost"
-DATABASE_PORT = 3306
-DATABASE_NAME = "caresync_pro"
+DATABASE_PORT = 5432
+DATABASE_NAME = "caresync_db"
 DATABASE_USER = "caresync_user"
 
 # User role definitions
